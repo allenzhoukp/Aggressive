@@ -1,0 +1,226 @@
+proc sql;
+create table all_eerbl_60d_imb as select distinct a.*, b.bas1, b.bas2, b.bas3, b.bas4, b.bas5, b.vol as bas6, b.depth1_adj as bas7, b.depth2_adj as bas8
+, b.bidvolume1 as bas9
+, b.bidvolume2 as bas10
+, b.askvolume1 as bas11
+, b.askvolume2 as bas12
+, b.buy as bas13
+, b.sell as bas14
+from broker.all_eerbl_60d_imb a left join broker.stk_vol b
+on a.stock_code_1=b.code and a.date=b.qdate
+order by stock_code_1, event_date,time_trade;
+run; 
+
+
+/*
+proc sql;
+create table all_eerbl_60d_imb as select distinct a.*
+,b.bas1_adj as bas1
+,b.bas2_adj as bas2
+,b.bas3_adj as bas3
+,b.bas4_adj as bas4
+,b.bas5_adj as bas5
+,b.vol_adj as bas6, b.dep1_adj as bas7, b.dep2_adj as bas8
+from broker.all_eerbl_60d_imb a left join broker.stk_vol_adj2 b
+on a.stock_code_1=b.code and a.date=b.qdate
+order by stock_code_1, event_date,time_trade;
+run; 
+*/
+
+%let start=0;
+%let end=1;
+%let pre=-10;
+
+%macro event(event);
+
+proc sql;
+create table &event._60d_imb as select distinct a.* from all_eerbl_60d_imb a,broker.all_eerbl b
+where a.stock_code_1=b.stock_code_1 and a.event_date=b.event_date and b.&event.=1;
+quit;
+
+
+proc sql;
+create table imb_b10 as select distinct stock_code_1,event_date
+,sum(all_imb_adj) as all_imbb10
+,sum(beijing_imb_adj) as beijing_imbb10
+,sum(shanghai_imb_adj) as shanghai_imbb10
+,sum(other_imb_adj) as other_imbb10
+,sum(home_city_imb_adj) as home_city_imbb10
+,sum(home_province_imb_adj) as home_province_imbb10
+,sum(fund_imb_adj) as fund_imbb10
+
+,mean(bas1) as bas1
+,mean(bas2) as bas2
+,mean(bas3) as bas3
+,mean(bas4) as bas4
+,mean(bas5) as bas5
+,mean(bas6) as bas6
+,mean(bas7) as bas7
+,mean(bas8) as bas8
+,mean(bas9) as bas9
+,mean(bas10) as bas10
+,mean(bas11) as bas11
+,mean(bas12) as bas12
+,mean(bas13) as bas13
+,mean(bas14) as bas14
+
+
+from &event._60d_imb
+where time_trade<&start and time_trade>=&start+&pre
+group by stock_code_1,event_date;
+quit;
+
+data sort_inv_&event;
+length event $20.;
+length quintile $20.;
+event='';
+quintile='';
+run;
+
+data imb_CAR;
+set imb_b10;
+run;
+
+%macro sort(inv);
+proc sql;
+create table imb_CAR1 as select * from imb_CAR
+where &inv._imbb10^=. and &inv._imbb10^=0;
+quit;
+
+
+proc sort;
+by &inv._imbb10;
+run;
+
+data _null_;
+       set imb_car1 nobs=t;
+       call symput("size",t);
+       stop;
+run;
+
+
+data imb_car1;
+set imb_car1;
+if _n_<=&size./5 then quintile=1;
+if _n_>&size./5 and _n_<=&size./5*2 then quintile=2;
+if _n_>&size./5*2 and _n_<= &size./5*3 then quintile=3;
+if _n_>&size./5*3 and _n_<=&size./5*4 then quintile=4;
+if _n_>&size./5*4 and _n_<=&size. then quintile=5;
+run;
+
+data imb_car1;
+set imb_car1;
+cluster1=week(event_date)+(year(event_date)-2007)*100;
+cluster2=week(event_date)+(year(event_date)-2007)*100;
+cluster3=month(event_date)+(year(event_date)-2007)*100;
+cluster4=month(event_date)+(year(event_date)-2007)*100;
+cluster5=qtr(event_date)+(year(event_date)-2007)*100;
+cluster6=qtr(event_date)+(year(event_date)-2007)*100;
+if quintile=3 then Q5=0;
+if quintile=5 then Q5=1;
+if quintile=3 then Q1=0;
+if quintile=1 then Q1=1;
+run;
+
+data Q3_5;
+set imb_car1;
+if Quintile=3 or Quintile=5;
+run;
+
+data Q3_1;
+set imb_car1;
+if Quintile=3 or Quintile=1;
+run;
+
+%macro CAR(n);
+ODS output Parameterestimates=temp1;
+proc surveyreg data=imb_car1;
+by quintile;
+model bas&n.=;
+cluster cluster3;
+run;
+ODS output close;
+
+ODS output Parameterestimates=temp2;
+proc surveyreg data=Q3_5;
+model bas&n.=Q5;
+cluster cluster3;
+run;
+ODS output close;
+
+data temp2;
+set temp2;
+if _n_=1 then delete;
+quintile=6;
+run;
+
+ODS output Parameterestimates=temp2_5;
+proc surveyreg data=Q3_1;
+model bas&n.=Q1;
+cluster cluster3;
+run;
+ODS output close;
+
+data temp2_5;
+set temp2_5;
+if _n_=1 then delete;
+quintile=7;
+run;
+
+data temp3_&n.;
+set temp1 temp2 temp2_5;
+rename estimate=bas&n._mean tvalue=bas&n._t;
+keep quintile estimate tValue;
+run;
+%mend CAR;
+
+%CAR(1);%CAR(2);%CAR(3);%CAR(4);%CAR(5);%CAR(6);%CAR(7);%CAR(8);%CAR(9);%CAR(10);%CAR(11);%CAR(12);%CAR(13);%CAR(14);
+
+data temp3;
+merge temp3_1 temp3_2 temp3_3 temp3_4 temp3_5 temp3_6 temp3_7 temp3_8 temp3_9 temp3_10 temp3_11 temp3_12 temp3_13 temp3_14;
+by quintile;
+if _n_<6 then group=cats("&inv",'_',quintile);
+if _n_=6 then group=cats("&inv",'_diff1');
+if _n_=7 then group=cats("&inv",'_diff2');
+drop quintile;
+rename group=quintile;
+run;
+
+data sort_inv_&event.;
+set sort_inv_&event. temp3;
+run;
+%mend sort;
+
+%sort(all);
+
+
+data sort_inv_&event.;
+set sort_inv_&event.;
+if quintile^='';
+event="&event.";
+run;
+
+%mend event;
+
+%event(earning);
+%event(earning_forecast);
+%event(restructure);
+%event(bankloan);
+%event(lawsuit);
+%event(suspension);
+%event(governor);
+%event(all);
+
+data indivi_sort;
+set sort_inv_all sort_inv_earning sort_inv_earning_forecast sort_inv_restructure sort_inv_bankloan sort_inv_lawsuit sort_inv_suspension sort_inv_governor;
+run;
+
+
+
+data indivi_sort;
+set indivi_sort;
+if mod(_n_,7)^=6 and mod(_n_,7)^=0 then do;
+bas1_t=0;bas2_t=0;bas3_t=0;bas4_t=0;bas5_t=0;bas6_t=0;bas7_t=0;bas8_t=0;bas9_t=0;bas10_t=0;bas11_t=0;bas12_t=0;bas13_t=0;bas14_t=0;
+end;
+run;
+

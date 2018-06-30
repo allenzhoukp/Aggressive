@@ -1,0 +1,201 @@
+data t_1001d;
+set broker.t_1001d;
+run;
+
+data t_1001d;
+set t_1001d;
+keep F1_T1001d F2_T1001d F8_T1001d F11_T1001d F14_T1001d F17_T1001d F20_T1001d F23_T1001d F26_T1001d F29_T1001d F32_T1001d;
+rename
+F2_T1001d=stock_code_1
+F8_T1001d=r1
+F11_T1001d=r2
+F14_T1001d=r3
+F17_T1001d=r4
+F20_T1001d=r5
+F23_T1001d=r6
+F26_T1001d=r7
+F29_T1001d=r8
+F32_T1001d=r9;
+run;
+
+data t_1001d;
+set t_1001d;
+date=mdy(input(substr(compress(F1_T1001D),5,2),6.),input(substr(compress(F1_T1001D),7,2),6.),input(substr(compress(F1_T1001D),1,4),6.));
+format date mmddyy.;
+drop F1_T1001d;
+label
+stock_code_1=stock_code_1
+r1=r1
+r2=r2
+r3=r3
+r4=r4
+r5=r5
+r6=r6
+r7=r7
+r8=r8
+r9=r9;
+run;
+
+proc sort data=t_1001d;
+by stock_code_1 date;
+run;
+
+data t_1001d;
+set t_1001d;
+
+lag10_r1=lag10(r1);
+lag10_r2=lag10(r2);
+lag10_r3=lag10(r3);
+lag10_r4=lag10(r4);
+lag10_r5=lag10(r5);
+lag10_r6=lag10(r6);
+lag10_r7=lag10(r7);
+lag10_r8=lag10(r8);
+lag10_r9=lag10(r9);
+
+by stock_code_1 date;
+if first.stock_code_1 then n=0;
+n+1;
+
+if n<=10 then do;
+lag10_r1=.;
+lag10_r2=.;
+lag10_r3=.;
+lag10_r4=.;
+lag10_r5=.;
+lag10_r6=.;
+lag10_r7=.;
+lag10_r8=.;
+lag10_r9=.;
+end;
+
+change1=r1-lag10_r1;
+change2=r2-lag10_r2;
+change3=r3-lag10_r3;
+change4=r4-lag10_r4;
+change5=r5-lag10_r5;
+change6=r6-lag10_r6;
+change7=r7-lag10_r7;
+change8=r8-lag10_r8;
+change9=r9-lag10_r9;
+
+run;
+
+
+data All_eerbl_60d_imb;
+set broker.All_eerbl_60d_imb;
+if time_trade>=-10 and time_trade<=21;
+run;
+
+proc sql;
+create table All_eerbl_60d_imb as select distinct a.*
+, b.change1
+, b.change2
+, b.change3
+, b.change4
+, b.change5
+, b.change6
+, b.change7
+, b.change8
+, b.change9
+
+from All_eerbl_60d_imb a left join t_1001d b
+on a.stock_code_1=b.stock_code_1 and a.date=b.date and a.time_trade=-1
+order by stock_code_1, event_date, date;
+run;
+
+%let start=0;
+%let end=1;
+%let pre=-10;
+proc sql;
+create table imb_b10 as select distinct stock_code_1,event_date
+,sum(all_imb_adj) as all_imbb10
+,sum(change1) as change1
+,sum(change2) as change2
+,sum(change3) as change3
+,sum(change4) as change4
+,sum(change5) as change5
+,sum(change6) as change6
+,sum(change7) as change7
+,sum(change8) as change8
+,sum(change9) as change9
+from All_eerbl_60d_imb
+where time_trade<&start and time_trade>=&start+&pre
+group by stock_code_1,event_date;
+quit;
+
+proc sql;
+create table imb_b10 as select * from imb_b10
+where all_imbb10^=.;
+quit;
+
+
+proc sort;
+by all_imbb10;
+run;
+
+data _null_;
+       set imb_b10 nobs=t;
+       call symput("size",t);
+       stop;
+run;
+
+data imb_b10;
+set imb_b10;
+if _n_<=&size./5 then quintile=1;
+if _n_>&size./5 and _n_<=&size./5*2 then quintile=2;
+if _n_>&size./5*2 and _n_<= &size./5*3 then quintile=3;
+if _n_>&size./5*3 and _n_<=&size./5*4 then quintile=4;
+if _n_>&size./5*4 and _n_<=&size. then quintile=5;
+run;
+
+/*
+proc tabulate data=imb_b10 out=share_change1;
+class quintile;
+var change1 change2 change3 change4 change5 change6 change7 change8 change9;
+table quintile,  (change1 change2 change3 change4 change5 change6 change7 change8 change9)*(mean std max p95 median p5 min);
+run;
+
+proc tabulate data=imb_b10 out=share_change2;
+class quintile;
+var change1 change2 change3 change4 change5 change6 change7 change8 change9;
+table quintile,  (change1 change2 change3 change4 change5 change6 change7 change8 change9)*(mean);
+run;
+*/
+data imb_b10;
+set imb_b10;
+cluster=month(event_date)+(year(event_date)-2007)*100;
+run;
+
+%macro CAR(n);
+
+ODS output Parameterestimates=temp&n.;
+proc surveyreg data=imb_b10;
+by quintile;
+model change&n.=;
+cluster cluster;
+run;
+ODS output close;
+
+data temp&n.;
+set temp&n.;
+rename estimate=change&n._mean tvalue=change&n._t;
+keep quintile estimate tvalue;
+run;
+
+data temp&n.;
+set temp&n.;
+label change&n._mean=change&n._mean change&n._t=change&n._t;
+run;
+
+%mend CAR;
+
+%CAR(1);%CAR(2);%CAR(3);%CAR(4);%CAR(5);%CAR(6);%CAR(7);%CAR(8);%CAR(9);
+
+data change_result;
+merge temp1-temp9;
+by quintile;
+run;
+
+
+
